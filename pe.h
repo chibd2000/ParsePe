@@ -4,15 +4,23 @@ void FileBufferToAddShellcode(PVOID pFileBuffer);
 void AddNewSection(PVOID pFileBuffer,PDWORD OldBufferSize,PVOID* pNewBuffer);
 void ExpandSection(PVOID pFileBuffer,PDWORD OldBufferSize,PVOID* pNewBuffer);
 void printfPE(PVOID pFileBuffer);
-void printfRELOCATION(PVOID pFileBuffer);
+void PrintRelocation(PVOID pFileBuffer); //打印重定位表
 DWORD FOA_TO_RVA(PVOID FileAddress, DWORD FOA,PDWORD pRVA);
 DWORD RVA_TO_FOA(PVOID FileAddress, DWORD RVA, PDWORD pFOA);
 void MyReadFile(PVOID *pFileBuffer,PDWORD BufferLenth);
 void MyWriteFile(PVOID pMemBuffer,DWORD BufferLenth);
 int GetBufferLength(PVOID Buffer);
+void PrintfImportTable(PVOID pFileBuffer); //打印导入表
+void MoveExportTable(PVOID pFileBuffer, PDWORD OldBufferSize,PVOID* pNewBuffer); //移动导出表
+void MoveRelocationTable(PVOID pFileBuffer, PDWORD OldBufferSize,PVOID* pNewBuffer); //移动重定位表
+void PrintBindImportTable(PVOID pFileBuffer); //打印绑定导入表
+void MoveAndInjectImportTable(PVOID pFileBuffer,PDWORD OldBufferSize,PVOID* pNewBuffer); //移动导入表、并且尝试进行注入
 
-#define FILENAME "C:\\Documents and Settings\\Administrator\\桌面\\mydll.dll"
-#define NEWFILENAME "C:\\Documents and Settings\\Administrator\\桌面\\NEW_ipmsg.exe"
+
+
+//#define FILENAME "C:\\Documents and Settings\\Administrator\\桌面\\mydell.dll"
+#define FILENAME "C:\\Documents and Settings\\Administrator\\桌面\\ipmsg.exe"
+#define NEWFILENAME "C:\\Documents and Settings\\Administrator\\桌面\\ipmsg_new.exe"
 
 int GetBufferLength(PVOID Buffer){
 	int BufferLength;
@@ -186,7 +194,7 @@ DWORD CopyImageBufferToNewBuffer(PVOID pImageBuffer,PVOID* pNewBuffer){
 }	
 
 
-//**************************************************************************								
+								
 //FOA_TO_RVA:FOA 转换 RVA							
 DWORD FOA_TO_RVA(PVOID FileAddress, DWORD FOA,PDWORD pRVA)
 {
@@ -223,6 +231,7 @@ DWORD FOA_TO_RVA(PVOID FileAddress, DWORD FOA,PDWORD pRVA)
 
 
 //功能：RVA 转换 FOA
+// RVA_TO_FOA(pFileBuffer,pOptionHeader->DataDirectory[5].VirtualAddress,&FOA);
 DWORD RVA_TO_FOA(PVOID FileAddress, DWORD RVA, PDWORD pFOA)
 {
 	int ret = 0;
@@ -232,17 +241,26 @@ DWORD RVA_TO_FOA(PVOID FileAddress, DWORD RVA, PDWORD pFOA)
 	PIMAGE_OPTIONAL_HEADER32 pOptionalHeader	= (PIMAGE_OPTIONAL_HEADER32)((DWORD)pFileHeader + sizeof(IMAGE_FILE_HEADER));
 	PIMAGE_SECTION_HEADER pSectionGroup			= (PIMAGE_SECTION_HEADER)((DWORD)pOptionalHeader + pFileHeader->SizeOfOptionalHeader);
 	
-	//RVA在文件头中 或 SectionAlignment 等于 FileAlignment 时RVA等于FOA
+	
+	//RVA在文件头中 或 SectionAlignment(内存对齐) 等于 FileAlignment(文件对齐) 时 RVA等于FOA
 	if (RVA < pOptionalHeader->SizeOfHeaders || pOptionalHeader->SectionAlignment == pOptionalHeader->FileAlignment)
 	{
+		// 37000
 		*pFOA = RVA;
 		return ret;
 	}
 	
+	/*
+		第一步：指定节.VirtualAddress <= RVA <= 指定节.VirtualAddress + Misc.VirtualSize(当前节内存实际大小)
+		第二步：差值 = RVA - 指定节.VirtualAddress
+		第三步：FOA = 指定节.PointerToRawData + 差值
+	*/
+
 	//循环判断RVA在节区中
-	for (i = 0; i < pFileHeader->NumberOfSections; i++)
+	for (i=0;i<pFileHeader->NumberOfSections; i++)
 	{
-		if (RVA >= pSectionGroup[i].VirtualAddress && RVA < pSectionGroup[i].VirtualAddress + pSectionGroup[i].PointerToRawData)
+		// RVA > 当前节在内存中的偏移地址 并且 RVA < 当前节的内存偏移地址+文件偏移地址
+		if (RVA >= pSectionGroup[i].VirtualAddress && RVA < pSectionGroup[i].VirtualAddress + pSectionGroup[i].Misc.VirtualSize)
 		{
 			*pFOA =  RVA - pSectionGroup[i].VirtualAddress + pSectionGroup[i].PointerToRawData;
 			return ret;
@@ -251,13 +269,13 @@ DWORD RVA_TO_FOA(PVOID FileAddress, DWORD RVA, PDWORD pFOA)
 	
 	//没有找到地址
 	ret = -4;
-	printf("func RAV_TO_FOA() Error: %d 地址转换失败！\n", ret);
+	printf("func RVA_TO_FOA() Error: %d 地址转换失败！\n", ret);
 	return ret;
 }
 								
 
 //功能：保存文件 
-void MyWriteFile(PVOID pMemBuffer,size_t size){
+void MyWriteFile(PVOID pNewBuffer,size_t size){
 	
 	FILE* File;
 	File = fopen(NEWFILENAME,"wb");
@@ -265,10 +283,10 @@ void MyWriteFile(PVOID pMemBuffer,size_t size){
 		printf("文件句柄打开失败");
 		return;
 	}
-	fwrite(pMemBuffer,size,1,File);
+	fwrite(pNewBuffer,size,1,File);
 	printf("文件保存成功!");
 	fclose(File);
-	free(pMemBuffer);
+	free(pNewBuffer);
 
 
 }
@@ -359,6 +377,8 @@ void FileBufferToAddShellcode(PVOID pFileBuffer){
 
 }
 
+
+//功能：添加新节
 void AddNewSection(PVOID pFileBuffer,PDWORD OldBufferSize,PVOID* pNewBuffer){
 	PIMAGE_DOS_HEADER pImageDosHeader = NULL;
 	PIMAGE_FILE_HEADER pImageFileHeader = NULL;
@@ -402,9 +422,10 @@ void AddNewSection(PVOID pFileBuffer,PDWORD OldBufferSize,PVOID* pNewBuffer){
 	
 	// pImageOptionalHeader->SizeOfImage修改
 	pImageOptionalHeader->SizeOfImage = (DWORD)pImageOptionalHeader->SizeOfImage + 0x1000;
-
+	
 	// 复制代码段的节数据到 当前最后一个节数据后面
 	CodeSection = (PVOID)(&pImageSectionHeaderGroup[0]);
+
 	LastSection = (PVOID)(DWORD)(&pImageSectionHeaderGroup[pImageFileHeader->NumberOfSections-1]);
 	memcpy(LastSection,CodeSection,40);
 	
@@ -415,10 +436,12 @@ void AddNewSection(PVOID pFileBuffer,PDWORD OldBufferSize,PVOID* pNewBuffer){
 	NewSec->SizeOfRawData = 0x1000;
 	NewSec->VirtualAddress = pImageSectionHeaderGroup[pImageFileHeader->NumberOfSections-2].VirtualAddress + pImageSectionHeaderGroup[pImageFileHeader->NumberOfSections-2].SizeOfRawData;
 	NewSec->PointerToRawData = pImageSectionHeaderGroup[pImageFileHeader->NumberOfSections-2].PointerToRawData + pImageSectionHeaderGroup[pImageFileHeader->NumberOfSections-2].SizeOfRawData;
+
+	//修改大小长度
 	*OldBufferSize = NewLength;
 }
 
-
+//功能：扩大节
 void ExpandSection(PVOID pFileBuffer,PDWORD OldBufferSize,PVOID* pNewBuffer){
 
 	PIMAGE_DOS_HEADER pImageDosHeader = NULL;
@@ -460,7 +483,7 @@ void ExpandSection(PVOID pFileBuffer,PDWORD OldBufferSize,PVOID* pNewBuffer){
 	*OldBufferSize = NewLength;
 }
 
-
+// 功能：打印PE结构
 void printfPE(PVOID pFileBuffer){
     PIMAGE_DOS_HEADER pDosHeader = NULL;    
     PIMAGE_NT_HEADERS pNTHeader = NULL; 
@@ -597,13 +620,10 @@ void printfPE(PVOID pFileBuffer){
 	for(j=0;j<pExportDirectory->NumberOfNames;j++){
 		//(PDWORD)((DWORD)AddressOfNamesTable + 4*j);
 		//获取当前函数名称表中的函数名称，然后循环判断
-		strcpy(FunName,(PVOID)((DWORD)AddressOfNamesTable + (strlen(AddressOfNamesTable)+1)*j)); //这里+1 是最后一个字节为空字节 那么就为结束符
-		if(0 == memcmp((PDWORD)((DWORD)AddressOfNamesTable + (DWORD)(strlen(AddressOfNamesTable)+1)*j),(PDWORD)FunName,strlen(FunName))){
-
-			//AddressOfNamesTable = (DWORD)AddressOfNamesTable + (DWORD)(strlen(AddressOfNamesTable)+1)
-
-		
-
+		//printf("this is my test:%s \n", (PVOID)((DWORD)AddressOfNamesTable));
+		strcpy(FunName,(PVOID)((DWORD)AddressOfNamesTable)); //这里+1 是最后一个字节为空字节 那么就为结束符
+		if(0 == memcmp((PDWORD)((DWORD)AddressOfNamesTable),(PDWORD)FunName,strlen(FunName))){
+			AddressOfNamesTable = (PVOID)((DWORD)AddressOfNamesTable + (DWORD)(strlen(AddressOfNamesTable)+1));			
 			//4、找到序号表AddressOfNameOrdinals下标所对应的的值，序号表中每个成员占2字节 word类型
 			RVA_TO_FOA(pFileBuffer,pExportDirectory->AddressOfNameOrdinals,&FOA);
 			AddressOfNameOrdinalsNumber = *(PWORD)((DWORD)FOA + (DWORD)pFileBuffer + (DWORD)j*2);
@@ -633,8 +653,8 @@ void printfPE(PVOID pFileBuffer){
     free(pFileBuffer);  
 }
 
-
-void printfRELOCATION(PVOID pFileBuffer){
+// 功能：打印重定位表
+void PrintRelocation(PVOID pFileBuffer){
 
 	PIMAGE_DOS_HEADER pDosHeader = NULL;    
     PIMAGE_NT_HEADERS pNTHeader = NULL; 
@@ -643,9 +663,10 @@ void printfRELOCATION(PVOID pFileBuffer){
     PIMAGE_SECTION_HEADER pSectionHeader = NULL;
 	PIMAGE_BASE_RELOCATION pRelocationDirectory = NULL;
 	DWORD FOA;
-	DWORD RealData;
+	DWORD RVA_Data;
+	WORD reloData;
 	int NumberOfRelocation = 0;
-	PVOID Location = NULL;
+	PWORD Location = NULL;
 	int i;
 
     pDosHeader = (PIMAGE_DOS_HEADER)pFileBuffer;
@@ -655,25 +676,707 @@ void printfRELOCATION(PVOID pFileBuffer){
 	pSectionHeader = (PIMAGE_SECTION_HEADER)((DWORD)pOptionHeader + IMAGE_SIZEOF_NT_OPTIONAL_HEADER);
 
 	// _IMAGE_DATA_DIRECTORY中的指向重定位表的虚拟地址转换为FOA地址
-	printf("%x\n",pOptionHeader->DataDirectory[5].VirtualAddress);
+	//printf("%x\n",pOptionHeader->DataDirectory[5].VirtualAddress);
 
+	printf("pRelocationDirectory_RVA:%x\n",pOptionHeader->DataDirectory[5].VirtualAddress);
 	RVA_TO_FOA(pFileBuffer,pOptionHeader->DataDirectory[5].VirtualAddress,&FOA);
+	printf("pRelocationDirectory_FOA:%x\n", FOA);
 
-	pRelocationDirectory = (PIMAGE_BASE_RELOCATION)((DWORD)pFileBuffer+FOA);
-	printf("%x",pRelocationDirectory->SizeOfBlock);
+	pRelocationDirectory = (PIMAGE_BASE_RELOCATION)((DWORD)pFileBuffer+(DWORD)FOA); //定位第一张重定位表 文件中的地址
+
 	while(pRelocationDirectory->SizeOfBlock && pRelocationDirectory->VirtualAddress){
-		NumberOfRelocation = (pRelocationDirectory->SizeOfBlock - 8)/2;
-		Location = (DWORD)pRelocationDirectory + 8;
+		printf("VirtualAddress    :%08X\n", pRelocationDirectory->VirtualAddress);
+		printf("SizeOfBlock       :%08X\n", pRelocationDirectory->SizeOfBlock);
+		printf("================= BlockData Start ======================\n");
+
+		
+		NumberOfRelocation = (pRelocationDirectory->SizeOfBlock - 8)/2;// 每个重定位块中的数据项的数量
+
+		Location = (PWORD)((DWORD)pRelocationDirectory + 8); // 加上8个字节
+
 		for(i=0;i<NumberOfRelocation;i++){
-			if((DWORD)Location >> 12 == 0){
-				continue;
+			if(Location[i] >> 12 != 0){ //判断是否是垃圾数据
+				// WORD类型的变量进行接收
+				reloData = (Location[i] & 0xFFF); //这里进行与操作 只取4字节 二进制的后12位
+				RVA_Data = pRelocationDirectory->VirtualAddress + reloData; //这个是RVA的地址
+				RVA_TO_FOA(pFileBuffer,RVA_Data,&FOA);
+				printf("第[%04X]项  数据项的数据为:[%04X]  数据属性为:[%X]  RVA的地址为:[%08X]  重定位的数据:[%08X]\n",i+1,reloData,(Location[i] >> 12),RVA_Data,*(PDWORD)((DWORD)pFileBuffer+FOA));
 			}
-			Location = (PVOID)((DWORD)Location << 4);
-			RealData = (DWORD)pRelocationDirectory->VirtualAddress + (DWORD)Location; 
-			RVA_TO_FOA(pFileBuffer,RealData,&FOA);
-			printf("第%d块 需要修复的地址的RVA:0x%x  重定位后的地址:0x%x",NumberOfRelocation,(DWORD)pFileBuffer + (DWORD)Location,RealData);
-			Location = (DWORD)Location + 4;
 		}
-		pRelocationDirectory = (PIMAGE_BASE_RELOCATION)((DWORD)pRelocationDirectory + (DWORD)pRelocationDirectory->SizeOfBlock);
+		pRelocationDirectory = (PIMAGE_BASE_RELOCATION)((DWORD)pRelocationDirectory + (DWORD)pRelocationDirectory->SizeOfBlock); //上面的for循环完成之后，跳转到下个重定位块 继续如上的操作
 	}
+}
+
+// 功能：移动导入表
+void MoveExportTable(PVOID pFileBuffer,PDWORD OldBufferSize,PVOID* pNewBuffer){
+	PIMAGE_DOS_HEADER pImageDosHeader = NULL;
+	PIMAGE_FILE_HEADER pImageFileHeader = NULL;
+	PIMAGE_OPTIONAL_HEADER32 pImageOptionalHeader = NULL;
+	PIMAGE_SECTION_HEADER pImageSectionHeaderGroup = NULL;
+	PIMAGE_SECTION_HEADER NewSec = NULL;
+
+	PIMAGE_EXPORT_DIRECTORY EXPORT_TABLE = NULL;
+	PIMAGE_EXPORT_DIRECTORY EXPORT_TABLE_NewBuffer = NULL;
+
+	PDWORD AddressFunctionName;
+	DWORD RVA = 0;
+	DWORD FOA = 0;
+	PDWORD pTempAddress;
+
+	int FunNameLen = 0;
+
+	char FunName[10] = {0};
+
+	int i = 0;
+	int j = 0;
+	int all_num = 0;
+
+
+	DWORD isOk;
+	DWORD NewLength=0;
+	PVOID LastSection = NULL;
+
+	pImageDosHeader = (PIMAGE_DOS_HEADER)pFileBuffer;
+	pImageFileHeader = (PIMAGE_FILE_HEADER)((DWORD)pImageDosHeader + pImageDosHeader->e_lfanew + 4);
+	pImageOptionalHeader = (PIMAGE_OPTIONAL_HEADER32)((DWORD)pImageFileHeader + sizeof(IMAGE_FILE_HEADER));
+	pImageSectionHeaderGroup = (PIMAGE_SECTION_HEADER)((DWORD)pImageOptionalHeader + pImageFileHeader->SizeOfOptionalHeader);
+	
+	/*
+	第一步：新增节
+	*/
+
+	//判断是否可以容纳相应的节表
+	isOk = (DWORD)pImageOptionalHeader->SizeOfHeaders - ((DWORD)pImageDosHeader->e_lfanew + IMAGE_SIZEOF_FILE_HEADER + pImageFileHeader->SizeOfOptionalHeader + 40*pImageFileHeader->NumberOfSections);
+	if(isOk < 80){
+		printf("空间太小 无法进行添加!");
+		return;
+	}
+
+	//申请对应的内存大小的空间
+	NewLength += *OldBufferSize + 0x1000;
+	*pNewBuffer = (PVOID)malloc(NewLength);
+	ZeroMemory(*pNewBuffer,NewLength);
+
+	//拷贝之前内存空间 到 当前新生成的内存空间
+	memcpy(*pNewBuffer,pFileBuffer,*OldBufferSize);
+
+	//获取新的空间中的PE结构体
+	pImageDosHeader = (PIMAGE_DOS_HEADER)(*pNewBuffer);
+	pImageFileHeader = (PIMAGE_FILE_HEADER)((DWORD)pImageDosHeader + pImageDosHeader->e_lfanew + 4);
+	pImageOptionalHeader = (PIMAGE_OPTIONAL_HEADER32)((DWORD)pImageFileHeader + sizeof(IMAGE_FILE_HEADER));
+	pImageSectionHeaderGroup = (PIMAGE_SECTION_HEADER)((DWORD)pImageOptionalHeader + pImageFileHeader->SizeOfOptionalHeader);
+	
+	// pImageFileHeader->NumberOfSections修改
+	pImageFileHeader->NumberOfSections = pImageFileHeader->NumberOfSections + 1;
+	
+	// pImageOptionalHeader->SizeOfImage修改
+	pImageOptionalHeader->SizeOfImage = (DWORD)pImageOptionalHeader->SizeOfImage + 0x1000;
+
+	// 得到新增节的地址,LastSection
+	LastSection = (PVOID)(DWORD)(&pImageSectionHeaderGroup[pImageFileHeader->NumberOfSections-1]);
+	RVA_TO_FOA(*pNewBuffer,pImageOptionalHeader->DataDirectory[0].VirtualAddress,&FOA);
+	EXPORT_TABLE = (PIMAGE_EXPORT_DIRECTORY)((DWORD)*pNewBuffer + (DWORD)FOA);
+
+	/*
+	第二步：复制AddressOfFunctions
+	长度：4*NumberOfFunctions		
+	*/
+	printf("AddressOfFunctions个数: %d 每个占4字节\n", EXPORT_TABLE->NumberOfFunctions);
+	RVA_TO_FOA(*pNewBuffer,EXPORT_TABLE->AddressOfFunctions,&FOA);
+	memcpy(LastSection,(PVOID)((DWORD)*pNewBuffer + FOA),((DWORD)EXPORT_TABLE->NumberOfFunctions)*4);
+
+	/*
+	第三步：复制AddressOfNameOrdinals				
+	长度：NumberOfNames*2			
+	*/
+	printf("AddressOfNameOrdinals个数: %d 每个占2字节\n", EXPORT_TABLE->NumberOfNames);
+
+	RVA_TO_FOA(*pNewBuffer, EXPORT_TABLE->AddressOfNameOrdinals,&FOA);
+	memcpy((PVOID)((DWORD)LastSection + ((DWORD)EXPORT_TABLE->NumberOfFunctions)*4),(PVOID)((DWORD)*pNewBuffer + FOA),((DWORD)EXPORT_TABLE->NumberOfNames)*2);
+
+	/*
+	第四步：复制AddressOfNames
+	长度：NumberOfNames*4		
+	*/
+	printf("AddressOfNames个数: %d 每个占4字节\n", EXPORT_TABLE->NumberOfNames);
+	RVA_TO_FOA(*pNewBuffer, EXPORT_TABLE->AddressOfNames,&FOA);
+	memcpy((PVOID)((DWORD)LastSection + ((DWORD)EXPORT_TABLE->NumberOfFunctions)*4 + ((DWORD)EXPORT_TABLE->NumberOfNames)*2),(PVOID)((DWORD)*pNewBuffer + FOA),(DWORD)EXPORT_TABLE->NumberOfNames*4);
+
+	/*
+	第五步：复制所有的函数名
+	长度不确定，复制时直接修复AddressOfNames				
+	*/
+
+	for(j=0;j<EXPORT_TABLE->NumberOfNames;j++){
+		//获得函数名称表的RVA，将其转换为FOA
+		RVA_TO_FOA(*pNewBuffer, EXPORT_TABLE->AddressOfNames,&FOA);
+
+		// 每个函数的RVA转换为FOA
+		RVA_TO_FOA(*pNewBuffer, FOA, &FOA);
+		
+		//获取当前函数名称的偏移地址
+		AddressFunctionName = (PDWORD)(*(PDWORD)((DWORD)*pNewBuffer + (DWORD)FOA + (DWORD)all_num));
+		//printf("%x",AddressFunctionName);
+
+		//将当前的函数名称的偏移地址加上 pNewBuffer 得到对应的内存地址 ，通过strcpy来获取当前地址保存的函数名称
+		strcpy(FunName,(PVOID)((DWORD)*pNewBuffer + (DWORD)AddressFunctionName));
+		//printf("%s",FunName);
+
+		//得到当前函数名称的长度
+		FunNameLen = strlen(FunName) + 1; //最后结尾需要+1，原因\0 空字节
+		
+		//拿到函数的长度和名称之后需要进行复制
+		memcpy(
+			(PVOID)((DWORD)LastSection + ((DWORD)EXPORT_TABLE->NumberOfFunctions)*4 + ((DWORD)EXPORT_TABLE->NumberOfNames)*2 + ((DWORD)EXPORT_TABLE->NumberOfNames)*4 + (DWORD)all_num) //这里到时候加循环来进行偏移复制
+			,(PVOID)((DWORD)*pNewBuffer + (DWORD)AddressFunctionName)
+			,FunNameLen);
+		
+		//接下来需要进行修复
+
+		//过程：每次复制完 还需要修复下之前刚复制AddressOfNames中的对应的地址 让它里面的值 保存为当前复制的函数地址
+		
+		//通过all_num来进行偏移 从而获得当前的地址是指向第j个函数的地址
+		pTempAddress = (PDWORD)((DWORD)LastSection + ((DWORD)EXPORT_TABLE->NumberOfFunctions)*4 + ((DWORD)EXPORT_TABLE->NumberOfNames)*2 + (DWORD)all_num);
+
+		//上面获得的地址是VA 还需要减去pNewBuffer变成FOA 然后再转换为RVA 最后存储到新复制的函数名称表对应的地址当中
+		FOA_TO_RVA(*pNewBuffer
+			,((DWORD)LastSection + ((DWORD)EXPORT_TABLE->NumberOfFunctions)*4 + ((DWORD)EXPORT_TABLE->NumberOfNames)*2 + ((DWORD)EXPORT_TABLE->NumberOfNames)*4 + (DWORD)all_num) -(DWORD)*pNewBuffer
+			,&RVA);
+		
+		//修改当前pTempAddress指向的地址中的值，修改为之前每个函数名称的的地址
+		*pTempAddress = RVA;
+		
+		// all_num用来保存复制函数名称的时候一共用了多少个字节
+		all_num += FunNameLen;
+  }
+
+	/*
+	第六步：复制IMAGE_EXPORT_DIRECTORY结构				
+	*/
+	memcpy((DWORD)LastSection + ((DWORD)EXPORT_TABLE->NumberOfFunctions)*4 + ((DWORD)EXPORT_TABLE->NumberOfNames)*2 + ((DWORD)EXPORT_TABLE->NumberOfNames)*4 + (DWORD)all_num
+		,EXPORT_TABLE
+		,40
+		);
+
+	
+	/*
+	第七步：修复IMAGE_EXPORT_DIRECTORY结构中的
+
+	AddressOfFunctions					
+	AddressOfNameOrdinals										
+	AddressOfNames					
+	*/
+	EXPORT_TABLE_NewBuffer = (PIMAGE_EXPORT_DIRECTORY)((DWORD)LastSection + ((DWORD)EXPORT_TABLE->NumberOfFunctions)*4 
+		+ ((DWORD)EXPORT_TABLE->NumberOfNames)*2 
+		+ ((DWORD)EXPORT_TABLE->NumberOfNames)*4 
+		+ (DWORD)all_num);
+
+	
+	//将新的缓冲区中的三个表中存储的地址都进行修改为上面移动好的位置
+	EXPORT_TABLE_NewBuffer->AddressOfFunctions = (DWORD)LastSection;
+	EXPORT_TABLE_NewBuffer->AddressOfNameOrdinals = ((DWORD)LastSection + ((DWORD)EXPORT_TABLE->NumberOfFunctions)*4);
+	EXPORT_TABLE_NewBuffer->AddressOfNames = ((DWORD)LastSection + ((DWORD)EXPORT_TABLE->NumberOfFunctions)*4 + ((DWORD)EXPORT_TABLE->NumberOfNames)*2);
+	
+	/*
+	第八步：修复目录项中的值，指向新的IMAGE_EXPORT_DIRECTORY						
+	*/
+	
+	FOA_TO_RVA(*pNewBuffer,(DWORD)EXPORT_TABLE_NewBuffer - (DWORD)*pNewBuffer,&RVA);
+	pImageOptionalHeader->DataDirectory[0].VirtualAddress = RVA;
+
+	/*
+	第九步：将pNewBuffer缓冲区的地址保存为新的文件
+	*/
+	MyWriteFile(*pNewBuffer, NewLength);
+		
+}
+
+void MoveRelocationTable(PVOID pFileBuffer, PDWORD OldBufferSize,PVOID* pNewBuffer){
+	PIMAGE_DOS_HEADER pImageDosHeader = NULL;
+	PIMAGE_FILE_HEADER pImageFileHeader = NULL;
+	PIMAGE_OPTIONAL_HEADER32 pImageOptionalHeader = NULL;
+	PIMAGE_SECTION_HEADER pImageSectionHeaderGroup = NULL;
+	PIMAGE_SECTION_HEADER NewSec = NULL;
+	PIMAGE_BASE_RELOCATION pRelocationDirectory = NULL;
+	
+	DWORD isOk;
+	DWORD NewLength=0;
+	PVOID LastSection = NULL;
+	PVOID CodeSection = NULL;
+	PVOID AddressOfSectionTable = NULL;
+	PVOID pTemp;
+
+	DWORD AllSizeOfBlock = 0;
+	DWORD RVA = 0;
+	DWORD FOA = 0;
+
+	int NumberOfRelocation=0;
+	PWORD Location = NULL;
+	int i = 0;
+	DWORD RVA_Data;
+	WORD reloData;
+
+
+
+	pImageDosHeader = (PIMAGE_DOS_HEADER)pFileBuffer;
+	pImageFileHeader = (PIMAGE_FILE_HEADER)((DWORD)pImageDosHeader + pImageDosHeader->e_lfanew + 4);
+	pImageOptionalHeader = (PIMAGE_OPTIONAL_HEADER32)((DWORD)pImageFileHeader + sizeof(IMAGE_FILE_HEADER));
+	pImageSectionHeaderGroup = (PIMAGE_SECTION_HEADER)((DWORD)pImageOptionalHeader + pImageFileHeader->SizeOfOptionalHeader);
+	
+	//判断是否可以容纳相应的节表
+	isOk = (DWORD)pImageOptionalHeader->SizeOfHeaders - ((DWORD)pImageDosHeader->e_lfanew + IMAGE_SIZEOF_FILE_HEADER + pImageFileHeader->SizeOfOptionalHeader + 40*pImageFileHeader->NumberOfSections);
+	if(isOk < 80){
+		printf("空间太小 无法进行添加!");
+		return;
+	}
+	
+	//生成对应的内存大小的空间
+	NewLength += *OldBufferSize + 0x1000;
+	*pNewBuffer = (PVOID)malloc(NewLength);
+	ZeroMemory(*pNewBuffer,NewLength);
+	
+	//拷贝之前内存空间 到 当前新生成的内存空间
+	memcpy(*pNewBuffer,pFileBuffer,*OldBufferSize);
+	
+	//获取新的结构体
+	pImageDosHeader = (PIMAGE_DOS_HEADER)(*pNewBuffer);
+	pImageFileHeader = (PIMAGE_FILE_HEADER)((DWORD)pImageDosHeader + pImageDosHeader->e_lfanew + 4);
+	pImageOptionalHeader = (PIMAGE_OPTIONAL_HEADER32)((DWORD)pImageFileHeader + sizeof(IMAGE_FILE_HEADER));
+	pImageSectionHeaderGroup = (PIMAGE_SECTION_HEADER)((DWORD)pImageOptionalHeader + pImageFileHeader->SizeOfOptionalHeader);
+	
+	// pImageFileHeader->NumberOfSections修改
+	pImageFileHeader->NumberOfSections = pImageFileHeader->NumberOfSections + 1;
+	
+	// pImageOptionalHeader->SizeOfImage修改
+	pImageOptionalHeader->SizeOfImage = (DWORD)pImageOptionalHeader->SizeOfImage + 0x1000;
+	
+	// 复制代码段的节数据到 当前最后一个节数据后面
+	CodeSection = (PVOID)(&pImageSectionHeaderGroup[0]);
+	
+	
+	LastSection = (PVOID)(DWORD)(&pImageSectionHeaderGroup[pImageFileHeader->NumberOfSections-1]);
+	memcpy(LastSection,CodeSection,40);
+	
+	//修正相关属性
+	NewSec = (PIMAGE_SECTION_HEADER)LastSection;
+	strcpy(NewSec,".NewSec");
+	NewSec->Misc.VirtualSize = 0x1000;
+	NewSec->SizeOfRawData = 0x1000;
+	NewSec->VirtualAddress = pImageSectionHeaderGroup[pImageFileHeader->NumberOfSections-2].VirtualAddress + pImageSectionHeaderGroup[pImageFileHeader->NumberOfSections-2].SizeOfRawData;
+	NewSec->PointerToRawData = pImageSectionHeaderGroup[pImageFileHeader->NumberOfSections-2].PointerToRawData + pImageSectionHeaderGroup[pImageFileHeader->NumberOfSections-2].SizeOfRawData;
+	*OldBufferSize = NewLength;
+
+	//到这里新增节已经完成了
+	AddressOfSectionTable = (PVOID)((DWORD)*pNewBuffer + (DWORD)NewSec->PointerToRawData);
+	
+	//printf("%x",AddressOfSectionTable);
+
+	//重定位表的FOA
+	RVA_TO_FOA(*pNewBuffer,pImageOptionalHeader->DataDirectory[5].VirtualAddress,&FOA);
+	
+	//获取结构
+	pRelocationDirectory = (PIMAGE_BASE_RELOCATION)((DWORD)*pNewBuffer + FOA);
+
+	pTemp = pRelocationDirectory;
+	
+	//printf("%x",pRelocationDirectory->VirtualAddress);
+	
+	//获取重定位表大小
+	while(pRelocationDirectory->SizeOfBlock && pRelocationDirectory->VirtualAddress){
+		AllSizeOfBlock = pRelocationDirectory->SizeOfBlock;
+		pRelocationDirectory = ((DWORD)pRelocationDirectory + (DWORD)pRelocationDirectory->SizeOfBlock);
+	}
+	
+	//复制重定位表到新增的节数据中
+	memcpy(AddressOfSectionTable,pTemp,AllSizeOfBlock);
+
+	//将PE可选头中的重定位的地址指向新增节数据的起始地址
+	pImageOptionalHeader->DataDirectory[5].VirtualAddress = (DWORD)AddressOfSectionTable;
+
+	
+	//修改DLL的ImageBase	
+	//pImageOptionalHeader->ImageBase += 1000;
+
+	//=============================================================
+	//=============================================================
+	//=============================================================
+	//=============================================================
+
+		
+	printf("pRelocationDirectory_RVA:%x\n",pImageOptionalHeader->DataDirectory[5].VirtualAddress);
+	RVA_TO_FOA(pFileBuffer,pImageOptionalHeader->DataDirectory[5].VirtualAddress,&FOA);
+	printf("pRelocationDirectory_FOA:%x\n", FOA);
+	
+	pRelocationDirectory = (PIMAGE_BASE_RELOCATION)((DWORD)pFileBuffer+(DWORD)FOA); //定位第一张重定位表 文件中的地址
+	
+	while(pRelocationDirectory->SizeOfBlock && pRelocationDirectory->VirtualAddress){
+		printf("VirtualAddress    :%08X\n", pRelocationDirectory->VirtualAddress);
+		printf("SizeOfBlock       :%08X\n", pRelocationDirectory->SizeOfBlock);
+		printf("================= BlockData Start ======================\n");
+		
+		
+		NumberOfRelocation = (pRelocationDirectory->SizeOfBlock - 8)/2;// 每个重定位块中的数据项的数量
+		
+		Location = (PWORD)((DWORD)pRelocationDirectory + 8); // 加上8个字节
+		
+		for(i=0;i<NumberOfRelocation;i++){
+			if(Location[i] >> 12 != 0){ //判断是否是垃圾数据
+				// WORD类型的变量进行接收
+				reloData = (Location[i] & 0xFFF); //这里进行与操作 只取4字节 二进制的后12位
+				RVA_Data = pRelocationDirectory->VirtualAddress + reloData; //这个是RVA的地址
+				RVA_TO_FOA(pFileBuffer,RVA_Data,&FOA);
+				printf("第[%04X]项  数据项的数据为:[%04X]  数据属性为:[%X]  RVA的地址为:[%08X]  重定位的数据:[%08X]\n"
+					,i+1
+					,reloData
+					,(Location[i] >> 12)
+					,RVA_Data
+					,*(PDWORD)((DWORD)pFileBuffer+(DWORD)FOA));
+
+				//这里是自增的 进行修复重定位，上面的Imagebase我们自增了1000，那么要修复的地址都需要自增1000
+				*(PDWORD)((DWORD)pFileBuffer+(DWORD)FOA) = *(PDWORD)((DWORD)pFileBuffer+(DWORD)FOA) + 1000;				
+			}
+		}
+		pRelocationDirectory = (PIMAGE_BASE_RELOCATION)((DWORD)pRelocationDirectory + (DWORD)pRelocationDirectory->SizeOfBlock); //上面的for循环完成之后，跳转到下个重定位块 继续如上的操作
+	}
+
+	//=============================================================
+	//=============================================================
+	//=============================================================
+	//=============================================================
+	//保存文件
+	MyWriteFile(*pNewBuffer,NewLength);
+}
+
+void PrintfImportTable(PVOID pFileBuffer){
+    PIMAGE_DOS_HEADER pDosHeader = NULL;    
+    PIMAGE_NT_HEADERS pNTHeader = NULL; 
+    PIMAGE_FILE_HEADER pPEHeader = NULL;    
+    PIMAGE_OPTIONAL_HEADER32 pOptionHeader = NULL;  
+    PIMAGE_SECTION_HEADER pSectionHeader = NULL;
+	PIMAGE_IMPORT_DESCRIPTOR pIMPORT_DESCRIPTOR;
+	PIMAGE_IMPORT_BY_NAME pImage_IMPORT_BY_NAME;
+
+
+	char ImportTableDllName[10] = {0};
+	char FunctionName[20] = {0};
+
+	PDWORD OriginalFirstThunk_INT = NULL;
+	PDWORD FirstThunk_IAT = NULL;
+
+	DWORD RVA = 0;
+	DWORD FOA = 0;
+	DWORD Original = 0;
+	
+    pDosHeader = (PIMAGE_DOS_HEADER)pFileBuffer;
+    pNTHeader = (PIMAGE_NT_HEADERS)((DWORD)pFileBuffer+pDosHeader->e_lfanew);
+    pPEHeader = (PIMAGE_FILE_HEADER)(((DWORD)pNTHeader) + 4);  
+    pOptionHeader = (PIMAGE_OPTIONAL_HEADER32)((DWORD)pPEHeader+IMAGE_SIZEOF_FILE_HEADER); 
+	pSectionHeader = (PIMAGE_SECTION_HEADER)((DWORD)pOptionHeader + IMAGE_SIZEOF_NT_OPTIONAL_HEADER);
+
+	//获取导入表的位置
+	RVA_TO_FOA(pFileBuffer,pOptionHeader->DataDirectory[1].VirtualAddress,&FOA);
+
+
+	//每个导入表的相关信息占20个字节
+	pIMPORT_DESCRIPTOR = (PIMAGE_IMPORT_DESCRIPTOR)((DWORD)pFileBuffer + (DWORD)FOA);
+	
+	//这里可以进行while操作，这里while的判断依据为 pIMPORT_DESCRIPTOR个数
+
+	printf("=========================================");
+	
+	while(pIMPORT_DESCRIPTOR->FirstThunk && pIMPORT_DESCRIPTOR->OriginalFirstThunk){
+		//这里打印的是INT表
+		//获取当前导入表DLL的名字
+		strcpy(ImportTableDllName,(PVOID)((DWORD)pFileBuffer + (DWORD)pIMPORT_DESCRIPTOR->Name));
+		
+		printf("当前打印的导出表的DLL为: %s \n", ImportTableDllName);
+		printf("\n");
+
+		//printf("TimeDateStamp: %x\n",pIMPORT_DESCRIPTOR->TimeDateStamp);
+		
+
+		printf("INT表打印\n");
+		//OriginalFirstThunk转换FOA
+		RVA_TO_FOA(pFileBuffer,pIMPORT_DESCRIPTOR->OriginalFirstThunk,&FOA);
+		
+		OriginalFirstThunk_INT = (PDWORD)((DWORD)pFileBuffer + (DWORD)FOA);
+		
+		//printf("%x",*OriginalFirstThunk_INT);
+		printf("\n");
+		while(*OriginalFirstThunk_INT){
+			//printf("%x\n ",*OriginalFirstThunk_INT);
+			if((*OriginalFirstThunk_INT) & 0X80000000){
+				//高位为1 则 除去最高位的值就是函数的导出序号
+				Original = *OriginalFirstThunk_INT & 0xFFF;	//去除最高标志位。
+				printf("按序号导入: %08Xh -- %08dd\n", Original, Original);	//16进制 -- 10 进制
+			}else{
+				//高位不为1 则指向IMAGE_IMPORT_BY_NAME
+				RVA_TO_FOA(pFileBuffer,*OriginalFirstThunk_INT,&FOA);
+				pImage_IMPORT_BY_NAME = (PIMAGE_IMPORT_BY_NAME)FOA;
+				strcpy(FunctionName,(PVOID)((DWORD)pFileBuffer + (DWORD)&(pImage_IMPORT_BY_NAME->Name)));
+				printf("按函数名导入 函数名为: %s \n",FunctionName);
+			}
+			OriginalFirstThunk_INT++;
+		}
+
+		printf("\n");
+		
+
+		//继续如上操作进行打印操作
+		//这里打印的是iat表
+
+		printf("IAT表打印\n");
+		//FirstThunk转换FOA
+		RVA_TO_FOA(pFileBuffer,pIMPORT_DESCRIPTOR->FirstThunk,&FOA);
+
+		FirstThunk_IAT = (PDWORD)((DWORD)pFileBuffer + (DWORD)FOA);
+		
+		//printf("%x",*OriginalFirstThunk_INT);
+		printf("\n");
+		while(*FirstThunk_IAT){
+			printf("%x\n ",*FirstThunk_IAT);
+
+			
+			if((*FirstThunk_IAT) & 0X80000000){
+				//高位为1 则 除去最高位的值就是函数的导出序号
+				Original = *FirstThunk_IAT & 0xFFF;	//去除最高标志位。
+				printf("按序号导入: %08Xh -- %08dd\n", Original, Original);	//16进制 -- 10 进制
+			}else{
+				//高位不为1 则指向IMAGE_IMPORT_BY_NAME
+				RVA_TO_FOA(pFileBuffer,*FirstThunk_IAT,&FOA);
+				pImage_IMPORT_BY_NAME = (PIMAGE_IMPORT_BY_NAME)FOA;
+				strcpy(FunctionName,(PVOID)((DWORD)pFileBuffer + (DWORD)&(pImage_IMPORT_BY_NAME->Name)));
+				printf("按函数名导入 函数名为: %s \n",FunctionName);
+			}
+			
+			FirstThunk_IAT++;
+		}
+		
+		printf("=========================================");
+		printf("\n");
+		
+		pIMPORT_DESCRIPTOR++;		
+	}
+}
+
+void PrintBindImportTable(PVOID pFileBuffer){
+	PIMAGE_DOS_HEADER pDosHeader = NULL;    
+    PIMAGE_NT_HEADERS pNTHeader = NULL; 
+    PIMAGE_FILE_HEADER pPEHeader = NULL;    
+    PIMAGE_OPTIONAL_HEADER32 pOptionHeader = NULL;  
+    PIMAGE_SECTION_HEADER pSectionHeader = NULL;
+	PIMAGE_BOUND_IMPORT_DESCRIPTOR pIMAGE_BOUND_IMPORT_DESCRIPTOR = NULL;
+	PIMAGE_BOUND_FORWARDER_REF pIMAGE_BOUND_FORWARDER_REF = NULL;
+
+	char ModuleName[20] = {0};
+	DWORD BOUNG_IMPORT_DESCRIPTOR_TEMP = NULL;
+	int i = 0;
+	DWORD RVA = 0;
+	DWORD FOA = 0;
+	
+    pDosHeader = (PIMAGE_DOS_HEADER)pFileBuffer;
+    pNTHeader = (PIMAGE_NT_HEADERS)((DWORD)pFileBuffer+pDosHeader->e_lfanew);
+    pPEHeader = (PIMAGE_FILE_HEADER)(((DWORD)pNTHeader) + 4);  
+    pOptionHeader = (PIMAGE_OPTIONAL_HEADER32)((DWORD)pPEHeader+IMAGE_SIZEOF_FILE_HEADER); 
+	pSectionHeader = (PIMAGE_SECTION_HEADER)((DWORD)pOptionHeader + IMAGE_SIZEOF_NT_OPTIONAL_HEADER);
+	
+	RVA_TO_FOA(pFileBuffer, pOptionHeader->DataDirectory[11].VirtualAddress,&FOA);
+
+	//保存第一个DESCRIPTOR的地址 后面加OffsetModuleName来进行使用
+	BOUNG_IMPORT_DESCRIPTOR_TEMP = (DWORD)pFileBuffer+(DWORD)FOA;
+
+	
+	//开始进行打印操作
+	pIMAGE_BOUND_IMPORT_DESCRIPTOR = (PIMAGE_BOUND_IMPORT_DESCRIPTOR)((DWORD)pFileBuffer+(DWORD)FOA);
+	
+	while (*(PDWORD)pIMAGE_BOUND_IMPORT_DESCRIPTOR)
+	{
+		printf("\n");
+		strcpy(ModuleName, (PVOID)((DWORD)BOUNG_IMPORT_DESCRIPTOR_TEMP + (DWORD)pIMAGE_BOUND_IMPORT_DESCRIPTOR->OffsetModuleName));
+		printf("模块名称: %s \n",ModuleName);
+		printf("模块的时间戳为: %x \n", pIMAGE_BOUND_IMPORT_DESCRIPTOR->TimeDateStamp);
+		printf("当前模块引用的dll的数量为: %x\n",pIMAGE_BOUND_IMPORT_DESCRIPTOR->NumberOfModuleForwarderRefs);
+
+		for(i=0;i<pIMAGE_BOUND_IMPORT_DESCRIPTOR->NumberOfModuleForwarderRefs;i++){
+			pIMAGE_BOUND_IMPORT_DESCRIPTOR++;
+			pIMAGE_BOUND_FORWARDER_REF = (PIMAGE_BOUND_FORWARDER_REF)pIMAGE_BOUND_IMPORT_DESCRIPTOR;
+			strcpy(ModuleName, (PVOID)((DWORD)BOUNG_IMPORT_DESCRIPTOR_TEMP + (DWORD)pIMAGE_BOUND_FORWARDER_REF->OffsetModuleName));
+			printf("\t引用的模块名称: %s \n",ModuleName);
+			printf("\t引用的模块的时间戳: %x\n", pIMAGE_BOUND_FORWARDER_REF->TimeDateStamp);
+		}
+	
+		pIMAGE_BOUND_IMPORT_DESCRIPTOR++;
+	}
+}
+
+void MoveAndInjectImportTable(PVOID pFileBuffer,PDWORD OldBufferSize,PVOID* pNewBuffer){
+
+	PIMAGE_DOS_HEADER pImageDosHeader = NULL;
+	PIMAGE_FILE_HEADER pImageFileHeader = NULL;
+	PIMAGE_OPTIONAL_HEADER32 pImageOptionalHeader = NULL;
+	PIMAGE_SECTION_HEADER pImageSectionHeaderGroup = NULL;
+	PIMAGE_SECTION_HEADER NewSec = NULL;
+	PIMAGE_IMPORT_DESCRIPTOR pIMPORT_DESCRIPTOR = NULL;
+	PIMAGE_IMPORT_DESCRIPTOR pIMPORT_DESCRIPTOR_Temp = NULL;
+	PIMAGE_IMPORT_BY_NAME IMPORT_BY_NAME = NULL;
+
+	
+	DWORD RVA = 0;
+	DWORD FOA = 0;
+	DWORD isOk;
+	DWORD NewLength=0;
+	PVOID LastSection = NULL;
+	PVOID CodeSection = NULL;
+	PVOID SectionOfNew= NULL;
+	PVOID SectionOfNewTemp = NULL;
+
+	pImageDosHeader = (PIMAGE_DOS_HEADER)pFileBuffer;
+	pImageFileHeader = (PIMAGE_FILE_HEADER)((DWORD)pImageDosHeader + pImageDosHeader->e_lfanew + 4);
+	pImageOptionalHeader = (PIMAGE_OPTIONAL_HEADER32)((DWORD)pImageFileHeader + sizeof(IMAGE_FILE_HEADER));
+	pImageSectionHeaderGroup = (PIMAGE_SECTION_HEADER)((DWORD)pImageOptionalHeader + pImageFileHeader->SizeOfOptionalHeader);
+	
+	//判断是否可以容纳相应的节表
+	isOk = (DWORD)pImageOptionalHeader->SizeOfHeaders - ((DWORD)pImageDosHeader->e_lfanew + IMAGE_SIZEOF_FILE_HEADER + pImageFileHeader->SizeOfOptionalHeader + 40*pImageFileHeader->NumberOfSections);
+	if(isOk < 80){
+		printf("空间太小 无法进行添加!");
+		return;
+	}
+	
+	//生成对应的内存大小的空间
+	NewLength += *OldBufferSize + 0x1000;
+	*pNewBuffer = (PVOID)malloc(NewLength);
+	ZeroMemory(*pNewBuffer,NewLength);
+	
+	//拷贝之前内存空间 到 当前新生成的内存空间
+	memcpy(*pNewBuffer,pFileBuffer,*OldBufferSize);
+	
+	//获取新的结构体
+	pImageDosHeader = (PIMAGE_DOS_HEADER)(*pNewBuffer);
+	pImageFileHeader = (PIMAGE_FILE_HEADER)((DWORD)pImageDosHeader + pImageDosHeader->e_lfanew + 4);
+	pImageOptionalHeader = (PIMAGE_OPTIONAL_HEADER32)((DWORD)pImageFileHeader + sizeof(IMAGE_FILE_HEADER));
+	pImageSectionHeaderGroup = (PIMAGE_SECTION_HEADER)((DWORD)pImageOptionalHeader + pImageFileHeader->SizeOfOptionalHeader);
+	
+	// pImageFileHeader->NumberOfSections修改
+	pImageFileHeader->NumberOfSections = pImageFileHeader->NumberOfSections + 1;
+	
+	// pImageOptionalHeader->SizeOfImage修改
+	pImageOptionalHeader->SizeOfImage = (DWORD)pImageOptionalHeader->SizeOfImage + 0x1000;
+	
+	// 复制代码段的节数据到 当前最后一个节数据后面
+	CodeSection = (PVOID)(&pImageSectionHeaderGroup[0]);
+	
+	//新增节的位置
+	LastSection = (PVOID)(DWORD)(&pImageSectionHeaderGroup[pImageFileHeader->NumberOfSections-1]);
+	memcpy(LastSection,CodeSection,40);
+	
+	//修正相关属性
+	NewSec = (PIMAGE_SECTION_HEADER)LastSection;
+	strcpy(NewSec,".NewSec");
+	NewSec->Misc.VirtualSize = 0x1000;
+	NewSec->SizeOfRawData = 0x1000;
+	NewSec->VirtualAddress = pImageSectionHeaderGroup[pImageFileHeader->NumberOfSections-2].VirtualAddress + pImageSectionHeaderGroup[pImageFileHeader->NumberOfSections-2].SizeOfRawData;
+	NewSec->PointerToRawData = pImageSectionHeaderGroup[pImageFileHeader->NumberOfSections-2].PointerToRawData + pImageSectionHeaderGroup[pImageFileHeader->NumberOfSections-2].SizeOfRawData;
+	
+	//修改大小长度
+	*OldBufferSize = NewLength;
+
+	//这里得到新节位置的指针
+	SectionOfNew = (PVOID)((DWORD)*pNewBuffer + (DWORD)NewSec->PointerToRawData);
+
+	//先获取导入表的地址
+	RVA_TO_FOA(*pNewBuffer,pImageOptionalHeader->DataDirectory[1].VirtualAddress,&FOA);
+	pIMPORT_DESCRIPTOR = (PIMAGE_IMPORT_DESCRIPTOR)((DWORD)*pNewBuffer + (DWORD)FOA);
+	//printf("start:%x\n", pIMPORT_DESCRIPTOR);
+
+	/*
+	第三步：			
+	将原导入表全部Copy到空白区			
+	*/
+
+	SectionOfNewTemp = SectionOfNew;
+
+	while (pIMPORT_DESCRIPTOR->OriginalFirstThunk && pIMPORT_DESCRIPTOR->FirstThunk)
+	{
+		//printf("%x\n", (DWORD)SectionOfNewTemp - (DWORD)*pNewBuffer);
+		memcpy(SectionOfNewTemp,pIMPORT_DESCRIPTOR,20);
+		pIMPORT_DESCRIPTOR++;
+		SectionOfNewTemp = (PVOID)((DWORD)SectionOfNewTemp + 20);
+	}
+	
+	//保存复制完导入表之后的地址
+	pIMPORT_DESCRIPTOR_Temp = SectionOfNewTemp;
+	printf("开始添加自己的导入表的地址:%x\n",(DWORD)SectionOfNewTemp-(DWORD)*pNewBuffer);
+
+
+	/*
+	第四步：				
+	在新的导入表后面，追加一个导入表.
+	  typedef struct _IMAGE_IMPORT_DESCRIPTOR {							
+	  union {							
+	  DWORD   Characteristics;           							
+	  DWORD   OriginalFirstThunk;         							
+	  };							
+	  DWORD   TimeDateStamp;               							
+	  DWORD   ForwarderChain;              							
+	  DWORD   Name;							
+	  DWORD   FirstThunk;                 							
+	  } IMAGE_IMPORT_DESCRIPTOR;							
+	  typedef IMAGE_IMPORT_DESCRIPTOR UNALIGNED *PIMAGE_IMPORT_DESCRIPTOR;							
+	*/
+
+	pIMPORT_DESCRIPTOR->TimeDateStamp = 0;
+	
+	pIMPORT_DESCRIPTOR->ForwarderChain = -1;
+
+	FOA_TO_RVA(*pNewBuffer,(DWORD)pIMPORT_DESCRIPTOR_Temp + 40 - (DWORD)*pNewBuffer,&RVA); // INT表占8个字节
+	pIMPORT_DESCRIPTOR_Temp->OriginalFirstThunk = RVA;  //这个是指向导入表相关INT表 存的是RVA，所以前面还需要转换下
+
+	FOA_TO_RVA(*pNewBuffer,(DWORD)pIMPORT_DESCRIPTOR_Temp + 40 + 8 - (DWORD)*pNewBuffer,&RVA); // IAT表占8个字节
+	pIMPORT_DESCRIPTOR_Temp->FirstThunk = RVA;// 这个是指向导入表相关的IAT 存的是RVA，所以前面还需要转换下
+
+	FOA_TO_RVA(*pNewBuffer,(DWORD)pIMPORT_DESCRIPTOR_Temp + 40 + 16 - (DWORD)*pNewBuffer,&RVA); // dll函数名占8个字节，这里自己就模拟 dll名称为abc.dll 长度为7个字节 最后一个字节为\0
+	pIMPORT_DESCRIPTOR_Temp->Name = RVA; // 这个是指向导入表相关的DLL名称 存的是RVA 所以前面还需要转换下
+
+	strcpy((PVOID)((DWORD)pIMPORT_DESCRIPTOR_Temp + 40 + 16),"abc.dll");
+
+	
+	/*
+	第五步：			
+	追加8个字节的INT表  8个字节的IAT表	，一个_IMAGE_THUNK_DATA32结构是4个字节 但是还需要4个字节来作为结束的标识符	所以这里总共是占16个字节	
+	*/
+	
+	FOA_TO_RVA(*pNewBuffer, ((DWORD)pIMPORT_DESCRIPTOR_Temp + 40 + 24 - (DWORD)*pNewBuffer),&RVA);
+
+	*(PDWORD)((DWORD)pIMPORT_DESCRIPTOR_Temp + 40) = RVA; //_IMAGE_THUNK_DATA32结构中的属性指向PIMAGE_IMPORT_BY_NAME 存的是RVA 所以前面需要转换下
+
+	FOA_TO_RVA(*pNewBuffer, ((DWORD)pIMPORT_DESCRIPTOR_Temp + 40 + 24 - (DWORD)*pNewBuffer),&RVA);
+	
+	*(PDWORD)((DWORD)pIMPORT_DESCRIPTOR_Temp + 40 + 8) = RVA; //指向PIMAGE_IMPORT_BY_NAME 存的是RVA 所以前面需要转换下
+
+	/*
+	第六步：							
+	  追加一个IMAGE_IMPORT_BY_NAME 结构，前2个字节是0 后面是函数名称字符串							
+	*/
+
+	//IMPORT_BY_NAME = (PIMAGE_IMPORT_BY_NAME)((DWORD)pIMPORT_DESCRIPTOR_Temp + 40 + 26);
+
+	//IMPORT_BY_NAME->Hint = 0;
+	//IMPORT_BY_NAME->Name = "myFun";
+	//strcpy(&IMPORT_BY_NAME->Name,"myFun");
+
+	*(PWORD)((DWORD)pIMPORT_DESCRIPTOR_Temp + 40 + 26) = 0;
+	strcpy((PVOID)((DWORD)pIMPORT_DESCRIPTOR_Temp + 40 + 26),"myFun");//这里写死了，函数的名称为myFun
+
+	/*
+	第七步：								
+	  修正IMAGE_DATA_DIRECTORY结构的VirtualAddress和Size
+	*/
+
+	
+	FOA_TO_RVA(*pNewBuffer,(DWORD)SectionOfNew - (DWORD)*pNewBuffer,&RVA);
+	pImageOptionalHeader->DataDirectory[1].VirtualAddress = RVA;
+	pImageOptionalHeader->DataDirectory[1].Size = (DWORD)pImageOptionalHeader->DataDirectory[1].Size + 20;
+
+	//最后进行存盘操作
+	MyWriteFile(*pNewBuffer, NewLength);
 }

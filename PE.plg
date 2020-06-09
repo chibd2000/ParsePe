@@ -6,27 +6,31 @@
 --------------------Configuration: PE - Win32 Debug--------------------
 </h3>
 <h3>Command Lines</h3>
-Creating temporary file "C:\DOCUME~1\ADMINI~1\LOCALS~1\Temp\RSP2A8.tmp" with contents
+Creating temporary file "C:\DOCUME~1\ADMINI~1\LOCALS~1\Temp\RSP1B63.tmp" with contents
 [
 /nologo /MLd /W3 /Gm /GX /ZI /Od /D "WIN32" /D "_DEBUG" /D "_CONSOLE" /D "_MBCS" /FR"Debug/" /Fp"Debug/PE.pch" /YX /Fo"Debug/" /Fd"Debug/" /FD /GZ /c 
 "C:\Visual.C++.6.EN\MyProjects\PE\pe.c"
 ]
-Creating command line "cl.exe @C:\DOCUME~1\ADMINI~1\LOCALS~1\Temp\RSP2A8.tmp" 
-Creating temporary file "C:\DOCUME~1\ADMINI~1\LOCALS~1\Temp\RSP2A9.tmp" with contents
+Creating command line "cl.exe @C:\DOCUME~1\ADMINI~1\LOCALS~1\Temp\RSP1B63.tmp" 
+Creating temporary file "C:\DOCUME~1\ADMINI~1\LOCALS~1\Temp\RSP1B64.tmp" with contents
 [
 kernel32.lib user32.lib gdi32.lib winspool.lib comdlg32.lib advapi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib kernel32.lib user32.lib gdi32.lib winspool.lib comdlg32.lib advapi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib /nologo /subsystem:console /incremental:yes /pdb:"Debug/PE.pdb" /debug /machine:I386 /out:"Debug/PE.exe" /pdbtype:sept 
 ".\Debug\pe.obj"
 ]
-Creating command line "link.exe @C:\DOCUME~1\ADMINI~1\LOCALS~1\Temp\RSP2A9.tmp"
+Creating command line "link.exe @C:\DOCUME~1\ADMINI~1\LOCALS~1\Temp\RSP1B64.tmp"
 <h3>Output Window</h3>
 Compiling...
 pe.c
-c:\visual.c++.6.en\myprojects\pe\pe.h(260) : warning C4028: formal parameter 2 different from declaration
-c:\visual.c++.6.en\myprojects\pe\pe.h(413) : warning C4133: 'function' : incompatible types - from 'struct _IMAGE_SECTION_HEADER *' to 'char *'
-c:\visual.c++.6.en\myprojects\pe\pe.h(473) : warning C4047: 'initializing' : 'unsigned long ' differs in levels of indirection from 'void *'
-c:\visual.c++.6.en\myprojects\pe\pe.h(597) : warning C4018: '<' : signed/unsigned mismatch
-c:\visual.c++.6.en\myprojects\pe\pe.h(666) : warning C4047: '=' : 'void *' differs in levels of indirection from 'unsigned long '
-c:\visual.c++.6.en\myprojects\pe\pe.h(675) : warning C4047: '=' : 'void *' differs in levels of indirection from 'unsigned long '
+c:\visual.c++.6.en\myprojects\pe\pe.h(278) : warning C4028: formal parameter 2 different from declaration
+c:\visual.c++.6.en\myprojects\pe\pe.h(434) : warning C4133: 'function' : incompatible types - from 'struct _IMAGE_SECTION_HEADER *' to 'char *'
+c:\visual.c++.6.en\myprojects\pe\pe.h(496) : warning C4047: 'initializing' : 'unsigned long ' differs in levels of indirection from 'void *'
+c:\visual.c++.6.en\myprojects\pe\pe.h(620) : warning C4018: '<' : signed/unsigned mismatch
+c:\visual.c++.6.en\myprojects\pe\pe.h(810) : warning C4018: '<' : signed/unsigned mismatch
+c:\visual.c++.6.en\myprojects\pe\pe.h(857) : warning C4022: 'memcpy' : pointer mismatch for actual parameter 1
+c:\visual.c++.6.en\myprojects\pe\pe.h(962) : warning C4133: 'function' : incompatible types - from 'struct _IMAGE_SECTION_HEADER *' to 'char *'
+c:\visual.c++.6.en\myprojects\pe\pe.h(987) : warning C4047: '=' : 'struct _IMAGE_BASE_RELOCATION *' differs in levels of indirection from 'unsigned long '
+c:\visual.c++.6.en\myprojects\pe\pe.h(1172) : warning C4047: 'initializing' : 'unsigned long ' differs in levels of indirection from 'void *'
+c:\visual.c++.6.en\myprojects\pe\pe.h(1274) : warning C4133: 'function' : incompatible types - from 'struct _IMAGE_SECTION_HEADER *' to 'char *'
 Linking...
 Creating command line "bscmake.exe /nologo /o"Debug/PE.bsc"  ".\Debug\pe.sbr""
 Creating browse info file...
@@ -35,7 +39,7 @@ Creating browse info file...
 
 
 <h3>Results</h3>
-PE.exe - 0 error(s), 6 warning(s)
+PE.exe - 0 error(s), 10 warning(s)
 </pre>
 </body>
 </html>
